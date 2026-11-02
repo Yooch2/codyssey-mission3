@@ -83,6 +83,13 @@ class TestDecide(unittest.TestCase):
     def test_허용오차보다_큰_차이는_구분한다(self):
         self.assertEqual(main.decide(1.0, 1.0 + 1e-6), main.X_MARK)
 
+    def test_허용오차_경계에서_갈린다(self):
+        # EPSILON보다 작으면 동점, 크거나 같으면 구분한다.
+        half = main.EPSILON / 2
+        self.assertEqual(main.decide(1.0, 1.0 + half), main.UNDECIDED)
+        self.assertEqual(main.decide(1.0, 1.0 + main.EPSILON * 2), main.X_MARK)
+        self.assertEqual(main.decide(1.0 + main.EPSILON * 2, 1.0), main.CROSS)
+
 
 class TestGenerator(unittest.TestCase):
     """패턴 생성기를 확인한다."""
@@ -120,6 +127,32 @@ class TestSchema(unittest.TestCase):
         self.assertIsNone(main.parse_size("filter_5"))
         self.assertIsNone(main.parse_size("size_abc"))
         self.assertIsNone(main.parse_size("size"))
+
+    def test_0_이하_크기는_거부한다(self):
+        # size_0을 통과시키면 빈 배열이 0x0 정사각 행렬로 인정되어
+        # 점수 0.0 대 0.0의 가짜 동점 판정이 나온다.
+        self.assertIsNone(main.parse_size("size_0"))
+        self.assertIsNone(main.parse_size("size_-3"))
+        self.assertIsNone(main.parse_size("size_0_1"))
+        self.assertTrue(main.is_square([], 0))  # 0을 막지 않으면 통과한다는 근거
+
+    def test_필터가_없으면_FAIL_사유를_돌려준다(self):
+        parsed, reason = main.check_case("size_7_1",
+                                         {"input": main.make_x(7), "expected": "x"}, {})
+        self.assertIsNone(parsed)
+        self.assertIn("필터가 data.json에 없음", reason)
+
+    def test_필터에_한쪽_라벨만_있으면_FAIL이다(self):
+        filters = {3: {main.CROSS: main.make_cross(3)}}
+        parsed, reason = main.check_case("size_3_1",
+                                         {"input": main.make_x(3), "expected": "x"}, filters)
+        self.assertIsNone(parsed)
+        self.assertIn("Cross/X 가 모두 있지 않음", reason)
+
+    def test_패턴_항목이_객체가_아니면_FAIL이다(self):
+        parsed, reason = main.check_case("size_3_1", "객체 아님", {})
+        self.assertIsNone(parsed)
+        self.assertIn("객체 형식이 아님", reason)
 
     def test_정렬은_크기와_번호_순이다(self):
         keys = ["size_13_2", "size_5_10", "size_5_2", "size_25_1"]
@@ -169,6 +202,70 @@ class TestDataFile(unittest.TestCase):
         for key, case in data["patterns"].items():
             parsed, reason = main.check_case(key, case, filters)
             self.assertIsNone(reason, "%s: %s" % (key, reason))
+
+    def test_모드2_전체_결과가_일치한다(self):
+        """미션 재현성 요구: 각 케이스의 PASS/FAIL과 총합이 일치해야 한다.
+
+        load_filters부터 결과 요약까지 실제 경로를 그대로 돌려서 확인한다.
+        """
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.run_json_mode()
+        output = buffer.getvalue()
+
+        expected_lines = [
+            "--- size_5_1 ---",
+            "판정: UNDECIDED | expected: X | FAIL (동점 규칙)",
+            "--- size_5_2 ---",
+            "판정: Cross | expected: Cross | PASS",
+            "--- size_13_1 ---",
+            "판정: X | expected: X | PASS",
+            "--- size_13_2 ---",
+            "판정: UNDECIDED | expected: Cross | FAIL (동점 규칙)",
+            "--- size_25_1 ---",
+            "판정: UNDECIDED | expected: X | FAIL (동점 규칙)",
+            "--- size_25_2 ---",
+            "판정: Cross | expected: Cross | PASS",
+            "총 테스트: 6개",
+            "통과: 3개",
+            "실패: 3개",
+            "  - 동점(UNDECIDED): 3개",
+            "  - 라벨 불일치: 0개",
+            "  - 데이터/스키마 오류: 0개",
+        ]
+        for line in expected_lines:
+            self.assertIn(line, output)
+
+    def test_모드2_점수가_일치한다(self):
+        """동점 케이스의 점수가 바뀌면 분석 내용이 통째로 흔들리므로 고정한다."""
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.run_json_mode()
+        output = buffer.getvalue()
+        for line in ["Cross 점수: 0.9",
+                     "X 점수: 0.8999999999999999",
+                     "Cross 점수: 7.499999999999997",
+                     "X 점수: 7.5",
+                     "Cross 점수: 4.9",
+                     "X 점수: 4.899999999999999"]:
+            self.assertIn(line, output)
+
+    def test_통과와_실패의_합이_전체와_같다(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.run_json_mode()
+        numbers = {}
+        for line in buffer.getvalue().splitlines():
+            for label in ("총 테스트", "통과", "실패"):
+                if line.startswith(label + ":"):
+                    numbers[label] = int(line.split(":")[1].strip().rstrip("개"))
+        self.assertEqual(numbers["통과"] + numbers["실패"], numbers["총 테스트"])
+
+    def test_읽은_파일_경로를_알려준다(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.run_json_mode()
+        self.assertIn(main.DATA_FILE, buffer.getvalue())
 
     def test_없는_파일을_읽어도_죽지_않는다(self):
         original = main.DATA_FILE
@@ -328,6 +425,99 @@ class TestMeasure(unittest.TestCase):
         value = main.measure_ms(main.mac, main.make_x(5), main.make_cross(5))
         self.assertGreater(value, 0)
         self.assertTrue(math.isfinite(value))
+
+
+class TestInteractiveFlow(unittest.TestCase):
+    """입력 루프와 메뉴 흐름을 확인한다."""
+
+    def run_with(self, inputs, function):
+        """입력을 차례로 흘려보내고 (반환값, 출력) 을 돌려준다."""
+        buffer = io.StringIO()
+        with mock.patch("builtins.input", side_effect=inputs):
+            with contextlib.redirect_stdout(buffer):
+                result = function()
+        return result, buffer.getvalue()
+
+    def test_틀린_줄만_다시_받는다(self):
+        # 1번째 줄이 두 개짜리라 거부되고, 다시 받은 줄부터 채워진다.
+        matrix, message = self.run_with(
+            ["0 1", "0 1 0", "1 1 1", "0 1 0"],
+            lambda: main.read_matrix("필터 A", 3))
+        self.assertEqual(matrix, [[0.0, 1.0, 0.0], [1.0, 1.0, 1.0], [0.0, 1.0, 0.0]])
+        self.assertIn("1번째 줄을 다시 입력하세요", message)
+
+    def test_중간_줄이_틀려도_앞은_유지된다(self):
+        matrix, message = self.run_with(
+            ["0 1 0", "x y z", "1 1 1", "0 1 0"],
+            lambda: main.read_matrix("필터 A", 3))
+        self.assertEqual(matrix[0], [0.0, 1.0, 0.0])
+        self.assertIn("2번째 줄을 다시 입력하세요", message)
+
+    def test_입력이_끊기면_모드1이_안내하고_끝난다(self):
+        # 이 검사가 없으면 EOF를 형식 오류와 똑같이 처리해
+        # '다시 입력하세요'가 끝없이 찍히는 무한 반복으로 되돌아가도 아무도 모른다.
+        # side_effect를 길이 1짜리 목록으로 둔다. 첫 호출만 EOFError를 내고
+        # 그 다음 호출은 StopIteration이 되므로, 버그가 되살아나도 테스트가
+        # 멈추지 않고 즉시 실패한다.
+        _, message = self.run_with([EOFError], main.run_user_mode)
+        self.assertIn("입력이 끝나 모드 1을 중단합니다", message)
+
+    def test_모드1은_예시대로_넣으면_B로_판정한다(self):
+        answers = ["0 1 0", "1 1 1", "0 1 0",     # 필터 A (십자가)
+                   "1 0 1", "0 1 0", "1 0 1",     # 필터 B (X자)
+                   "1 0 1", "0 1 0", "1 0 1"]     # 패턴 (X자)
+        _, message = self.run_with(answers, main.run_user_mode)
+        self.assertIn("A 점수: 1.0", message)
+        self.assertIn("B 점수: 5.0", message)
+        self.assertIn("판정: B", message)
+
+    def test_모드1은_동점이면_판정_불가를_알린다(self):
+        answers = ["1 0 0", "0 0 0", "0 0 0",     # 필터 A
+                   "0 0 0", "0 0 0", "0 0 1",     # 필터 B
+                   "1 0 0", "0 0 0", "0 0 1"]     # 패턴 (양쪽 모두 1.0)
+        _, message = self.run_with(answers, main.run_user_mode)
+        self.assertIn("판정: 판정 불가", message)
+
+    def test_메뉴는_잘못된_번호를_다시_묻는다(self):
+        choice, message = self.run_with(["9", "엔터", "2"], main.choose_mode)
+        self.assertEqual(choice, "2")
+        self.assertIn("1, 2, 3 중에서 선택하세요", message)
+
+    def test_메뉴에서_3이나_입력끝이면_종료한다(self):
+        self.assertIsNone(self.run_with(["3"], main.choose_mode)[0])
+        self.assertIsNone(self.run_with([EOFError], main.choose_mode)[0])
+
+
+class TestPerformanceOutput(unittest.TestCase):
+    """성능 표 출력의 형태를 확인한다."""
+
+    def capture(self, function, sizes):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            result = function(sizes)
+        return result, buffer.getvalue()
+
+    def test_크기마다_한_줄씩_연산_횟수와_함께_찍는다(self):
+        measured, output = self.capture(main.print_performance, [3, 5])
+        self.assertEqual([size for size, _ in measured], [3, 5])
+        self.assertTrue(all(time > 0 for _, time in measured))
+        self.assertIn("3x3", output)
+        self.assertIn("9", output)     # 3의 제곱
+        self.assertIn("25", output)    # 5의 제곱
+        self.assertIn("연산 횟수", output)
+
+    def test_최적화_비교는_두_방식을_나란히_찍는다(self):
+        _, output = self.capture(main.print_optimization, [5])
+        self.assertIn("2차원(ms)", output)
+        self.assertIn("1차원(ms)", output)
+        self.assertRegex(output, r"[+-]\d+\.\d%")
+
+    def test_미션이_요구한_네_크기를_모두_다룬다(self):
+        self.assertEqual(main.PERF_SIZES, [3, 5, 13, 25])
+        _, output = self.capture(main.print_performance, main.PERF_SIZES)
+        for size in main.PERF_SIZES:
+            self.assertIn("%dx%d" % (size, size), output)
+            self.assertIn(str(size * size), output)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ X자에 가까운지 판별하는 콘솔 애플리케이션이다.
 import json
 import os
 import time
+import unicodedata
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, "data.json")
@@ -17,6 +18,12 @@ EPSILON = 1e-9
 
 # 성능 측정 반복 횟수(미션 최소 기준 10회)
 REPEAT = 10
+
+# 측정 전에 버리는 호출 횟수. 첫 호출은 데이터가 CPU 캐시에 없어 느리다.
+# 25x25로 재보면 0회 대비 1회에서 약 3%, 10회까지 늘리면 약 10% 낮아진다.
+# 평평해지는 지점이 따로 없어서, 측정 비용이 거의 들지 않는 1을 기본값으로 뒀다.
+# 절대 시간이 중요하면 호출할 때 warmup 인자를 올려서 비교하면 된다.
+WARMUP = 1
 
 # 프로그램 내부에서 쓰는 표준 라벨
 CROSS = "Cross"
@@ -77,12 +84,14 @@ def mac_flat(flat_pattern, flat_filter):
     return total
 
 
-def measure_ms(function, left, right, repeat=REPEAT):
+def measure_ms(function, left, right, repeat=REPEAT, warmup=WARMUP):
     """연산 함수를 repeat번 호출한 평균 시간을 ms로 돌려준다.
 
     입출력이나 파일 읽기는 측정 구간에 넣지 않고, 연산 함수 호출만 감싼다.
+    warmup번의 호출은 측정 구간 밖에서 미리 돌려 캐시를 데운 뒤 버린다.
     """
-    function(left, right)  # 첫 호출은 캐시가 비어 있어 느리므로 측정에서 뺀다
+    for _ in range(warmup):
+        function(left, right)
     start = time.perf_counter()
     for _ in range(repeat):
         function(left, right)
@@ -158,11 +167,13 @@ def make_x(size):
 # ---------------------------------------------------------------
 
 def read_row(size):
-    """한 줄을 받아 size개의 실수 리스트로 바꾼다. 형식이 틀리면 None."""
-    try:
-        raw = input()
-    except EOFError:
-        return None
+    """한 줄을 받아 size개의 실수 리스트로 바꾼다. 형식이 틀리면 None.
+
+    입력이 끝나면(Ctrl+D, 파이프 종료) EOFError가 그대로 위로 올라간다.
+    형식 오류는 다시 받으면 되지만 입력이 끊긴 상황은 재입력이 불가능해서,
+    둘을 구분하지 않으면 안내 문구만 끝없이 찍히게 된다.
+    """
+    raw = input()
     parts = raw.split()
     # "0 1 0" 이 기본이지만 "010" 처럼 붙여 쓴 경우도 받아준다.
     if len(parts) == 1 and len(parts[0]) == size:
@@ -210,44 +221,94 @@ def format_number(value):
 # 성능 분석
 # ---------------------------------------------------------------
 
+def display_width(text):
+    """터미널에 찍히는 칸 수를 센다.
+
+    한글과 전각 기호는 글자 하나가 두 칸을 차지한다. len()은 이를 1로 세기
+    때문에 그대로 쓰면 한글 머리글이 들어간 표의 열이 어긋난다.
+    """
+    width = 0
+    for character in text:
+        if unicodedata.east_asian_width(character) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def print_table(headers, rows):
+    """열 너비를 내용에 맞춰 잡아 표를 찍는다.
+
+    폭을 숫자로 박아두면 값이 길어졌을 때 칸이 밀려 읽기 어려워진다.
+    머리글과 모든 칸의 폭을 먼저 재서 가장 넓은 것에 맞춘다.
+    """
+    widths = []
+    for index, header in enumerate(headers):
+        widest = display_width(header)
+        for row in rows:
+            widest = max(widest, display_width(row[index]))
+        widths.append(widest)
+
+    def format_row(cells):
+        padded = []
+        for index, cell in enumerate(cells):
+            padding = widths[index] - display_width(cell)
+            padded.append(cell + " " * padding)
+        return "  ".join(padded).rstrip()
+
+    print(format_row(headers))
+    print("-" * (sum(widths) + 2 * (len(widths) - 1)))
+    for row in rows:
+        print(format_row(row))
+
+
 def print_performance(sizes):
     """크기별 MAC 연산의 평균 시간과 연산 횟수를 표로 찍는다."""
-    print("크기       평균 시간(ms)    연산 횟수")
-    print("-" * 38)
     rows = []
+    measured = []
     for size in sizes:
         pattern = make_x(size)
         matrix_filter = make_cross(size)
         average = measure_ms(mac, pattern, matrix_filter)
-        label = "%dx%d" % (size, size)
-        print("%-10s %-16.4f %d" % (label, average, size * size))
-        rows.append((size, average))
-    return rows
+        rows.append(["%dx%d" % (size, size), "%.4f" % average, str(size * size)])
+        measured.append((size, average))
+    print_table(["크기", "평균 시간(ms)", "연산 횟수"], rows)
+    return measured
 
 
 def print_optimization(sizes):
     """보너스: 2차원 접근과 1차원 접근의 평균 시간을 같은 조건으로 비교한다."""
-    print("크기       2차원(ms)        1차원(ms)        변화율")
-    print("-" * 56)
+    rows = []
     for size in sizes:
         pattern = make_x(size)
         matrix_filter = make_cross(size)
         before = measure_ms(mac, pattern, matrix_filter)
         after = measure_ms(mac_flat, flatten(pattern), flatten(matrix_filter))
         if before > 0:
-            change = (after - before) / before * 100
+            change = "%+.1f%%" % ((after - before) / before * 100)
         else:
-            change = 0.0
-        label = "%dx%d" % (size, size)
-        print("%-10s %-16.4f %-16.4f %+.1f%%" % (label, before, after, change))
-
+            change = "측정 불가"
+        rows.append(["%dx%d" % (size, size), "%.4f" % before, "%.4f" % after, change])
+    print_table(["크기", "2차원(ms)", "1차원(ms)", "변화율"], rows)
 
 # ---------------------------------------------------------------
 # 모드 1: 사용자 입력 (3x3)
 # ---------------------------------------------------------------
 
 def run_user_mode():
-    """3x3 필터 두 개와 패턴을 입력받아 MAC 점수를 비교한다."""
+    """3x3 필터 두 개와 패턴을 입력받아 MAC 점수를 비교한다.
+
+    입력 도중 Ctrl+D로 입력이 끝나면 안내를 남기고 메뉴로 돌아간다.
+    """
+    try:
+        run_user_mode_steps()
+    except EOFError:
+        print()
+        print("입력이 끝나 모드 1을 중단합니다. 메뉴로 돌아갑니다.")
+
+
+def run_user_mode_steps():
+    """모드 1의 실제 입력-연산-출력 흐름."""
     size = 3
 
     print_header("[1] 필터 입력")
@@ -411,7 +472,10 @@ def run_json_mode():
 
     print_header("[2] 패턴 분석 (라벨 정규화 적용)")
     passed = 0
-    failures = []
+    failures = []          # (케이스, 사유, 점수 상세)
+    undecided_count = 0    # 동점으로 FAIL 난 개수
+    mismatch_count = 0     # 판정은 났지만 expected와 다른 개수
+    schema_count = 0       # 데이터/스키마 문제로 판정 자체를 못 한 개수
     keys = sorted(raw_patterns.keys(), key=sort_key)
 
     for key in keys:
@@ -419,13 +483,16 @@ def run_json_mode():
         parsed, reason = check_case(key, raw_patterns[key], filters)
         if parsed is None:
             print("판정: FAIL (%s)" % reason)
-            failures.append((key, reason))
+            failures.append((key, reason, ""))
+            schema_count += 1
             continue
 
         pattern, expected, table = parsed
         score_cross = mac(pattern, table[CROSS])
         score_x = mac(pattern, table[X_MARK])
         verdict = decide(score_cross, score_x)
+        detail = "Cross %s / X %s, 차이 %.3e" % (
+            score_cross, score_x, abs(score_cross - score_x))
 
         print("Cross 점수: %s" % score_cross)
         print("X 점수: %s" % score_x)
@@ -435,10 +502,12 @@ def run_json_mode():
             passed += 1
         elif verdict == UNDECIDED:
             print("판정: %s | expected: %s | FAIL (동점 규칙)" % (verdict, expected))
-            failures.append((key, "동점(UNDECIDED) 처리 규칙에 따라 FAIL"))
+            failures.append((key, "동점(UNDECIDED) 처리 규칙에 따라 FAIL", detail))
+            undecided_count += 1
         else:
             print("판정: %s | expected: %s | FAIL" % (verdict, expected))
-            failures.append((key, "판정 %s 와 expected %s 가 다름" % (verdict, expected)))
+            failures.append((key, "판정 %s 와 expected %s 가 다름" % (verdict, expected), detail))
+            mismatch_count += 1
 
     print_header("[3] 성능 분석 (평균/%d회)" % REPEAT)
     print_performance(PERF_SIZES)
@@ -450,11 +519,16 @@ def run_json_mode():
     print("총 테스트: %d개" % len(keys))
     print("통과: %d개" % passed)
     print("실패: %d개" % len(failures))
+    print("  - 동점(UNDECIDED): %d개" % undecided_count)
+    print("  - 라벨 불일치: %d개" % mismatch_count)
+    print("  - 데이터/스키마 오류: %d개" % schema_count)
     if failures:
         print()
         print("실패 케이스:")
-        for key, reason in failures:
+        for key, reason, detail in failures:
             print("- %s: %s" % (key, reason))
+            if detail:
+                print("    %s" % detail)
 
 
 # ---------------------------------------------------------------
@@ -495,4 +569,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        print("사용자가 중단했습니다.")

@@ -7,9 +7,11 @@
 import contextlib
 import io
 import json
+import math
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 import main
 
@@ -178,6 +180,154 @@ class TestDataFile(unittest.TestCase):
                 self.assertIn("찾을 수 없습니다", captured.getvalue())
             finally:
                 main.DATA_FILE = original
+
+
+class TestReadRow(unittest.TestCase):
+    """모드 1의 한 줄 입력 처리를 확인한다."""
+
+    def read(self, text, size=3):
+        """입력 한 줄을 흉내 내고 (결과, 출력된 안내) 를 돌려준다."""
+        buffer = io.StringIO()
+        with mock.patch("builtins.input", return_value=text):
+            with contextlib.redirect_stdout(buffer):
+                result = main.read_row(size)
+        return result, buffer.getvalue()
+
+    def test_공백으로_구분된_세_값을_읽는다(self):
+        self.assertEqual(self.read("0 1 0")[0], [0.0, 1.0, 0.0])
+
+    def test_음수와_지수표기도_읽는다(self):
+        self.assertEqual(self.read("-1 2e-3 3")[0], [-1.0, 0.002, 3.0])
+
+    def test_붙여쓴_숫자도_읽는다(self):
+        self.assertEqual(self.read("010")[0], [0.0, 1.0, 0.0])
+
+    def test_값이_모자라면_개수를_알려준다(self):
+        # '0.5'는 길이가 3이지만 숫자 하나다. 글자로 쪼개면 '.'을 숫자가
+        # 아니라고 지적하게 되어 개수가 모자란다는 사실이 가려진다.
+        result, message = self.read("0.5")
+        self.assertIsNone(result)
+        self.assertIn("3개의 숫자", message)
+
+    def test_음수_하나만_넣어도_개수를_알려준다(self):
+        result, message = self.read("-11")
+        self.assertIsNone(result)
+        self.assertIn("3개의 숫자", message)
+
+    def test_숫자가_아니면_거부한다(self):
+        result, message = self.read("x y z")
+        self.assertIsNone(result)
+        self.assertIn("숫자가 아닙니다", message)
+
+    def test_nan과_inf는_거부한다(self):
+        for text in ("nan 0 1", "inf 0 1", "-inf 0 1", "1e400 0 1"):
+            result, message = self.read(text)
+            self.assertIsNone(result, text)
+            self.assertIn("유한한 숫자", message)
+
+    def test_입력이_끝나면_EOFError가_올라온다(self):
+        with mock.patch("builtins.input", side_effect=EOFError):
+            with self.assertRaises(EOFError):
+                main.read_row(3)
+
+
+class TestFormatNumber(unittest.TestCase):
+    """행렬 확인 출력에 쓰는 숫자 표기를 확인한다."""
+
+    def test_정수면_소수점을_생략한다(self):
+        self.assertEqual(main.format_number(1.0), "1")
+        self.assertEqual(main.format_number(-3.0), "-3")
+
+    def test_소수는_그대로_보여준다(self):
+        self.assertEqual(main.format_number(0.5), "0.5")
+
+    def test_무한과_NaN에서_죽지_않는다(self):
+        # int(inf)와 int(nan)은 예외를 낸다. 그대로 두면 출력 단계에서
+        # 추적 메시지를 내며 프로그램이 멈춘다.
+        self.assertEqual(main.format_number(float("inf")), "inf")
+        self.assertEqual(main.format_number(float("nan")), "nan")
+
+    def test_행렬_전체를_찍어도_죽지_않는다(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.print_matrix([[float("nan"), 1.0], [0.0, float("inf")]])
+        self.assertIn("nan", buffer.getvalue())
+
+
+class TestTable(unittest.TestCase):
+    """표 출력의 열 정렬을 확인한다."""
+
+    def test_한글은_두_칸으로_센다(self):
+        self.assertEqual(main.display_width("크기"), 4)
+        self.assertEqual(main.display_width("3x3"), 3)
+        # 평균(4) + 공백(1) + 시간(4) + "(ms)"(4) = 13
+        self.assertEqual(main.display_width("평균 시간(ms)"), 13)
+
+    def test_값이_길어져도_열이_맞는다(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            main.print_table(["크기", "값"],
+                             [["1000x1000", "12345.6789"], ["3x3", "0.0003"]])
+        lines = buffer.getvalue().splitlines()
+        # 머리글과 각 행에서 두 번째 열이 시작하는 칸 위치가 모두 같아야 한다.
+        # 한글 머리글이 두 칸을 차지하므로 글자 수가 아니라 표시 폭으로 잰다.
+        starts = []
+        for line, second in ((lines[0], "값"),
+                             (lines[2], "12345.6789"),
+                             (lines[3], "0.0003")):
+            starts.append(main.display_width(line[:line.rindex(second)]))
+        self.assertEqual(len(set(starts)), 1, (starts, lines))
+
+
+class TestLoadFilters(unittest.TestCase):
+    """필터 로드와 경고를 확인한다."""
+
+    def load(self, raw):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            result = main.load_filters(raw)
+        return result, buffer.getvalue()
+
+    def test_라벨을_표준_라벨로_바꿔_담는다(self):
+        filters, _ = self.load({"size_3": {"cross": main.make_cross(3),
+                                           "x": main.make_x(3)}})
+        self.assertEqual(sorted(filters[3].keys()), [main.CROSS, main.X_MARK])
+
+    def test_크기가_안_맞는_필터는_경고하고_뺀다(self):
+        filters, message = self.load({"size_5": {"cross": main.make_cross(3),
+                                                 "x": main.make_x(5)}})
+        self.assertNotIn(main.CROSS, filters[5])
+        self.assertIn(main.X_MARK, filters[5])
+        self.assertIn("5x5 숫자 배열이 아니라", message)
+
+    def test_같은_크기가_두_번_나오면_경고한다(self):
+        # 'size_3_백업'도 크기 3으로 해석되어 앞의 필터를 덮어쓴다.
+        # 경고가 없으면 어느 쪽이 쓰였는지 알 수 없다.
+        _, message = self.load({
+            "size_3": {"cross": main.make_cross(3), "x": main.make_x(3)},
+            "size_3_백업": {"cross": main.make_cross(3), "x": main.make_x(3)},
+        })
+        self.assertIn("이미 있습니다", message)
+
+    def test_필터가_객체가_아니면_건너뛴다(self):
+        filters, message = self.load({"size_3": "행렬 아님"})
+        self.assertEqual(filters, {})
+        self.assertIn("형식을 알 수 없어", message)
+
+
+class TestMeasure(unittest.TestCase):
+    """시간 측정 함수의 호출 횟수를 확인한다."""
+
+    def test_워밍업은_측정에_포함되지_않는다(self):
+        calls = []
+        main.measure_ms(lambda a, b: calls.append(1), None, None,
+                        repeat=4, warmup=3)
+        self.assertEqual(len(calls), 7)  # 워밍업 3 + 측정 4
+
+    def test_반환값은_양수인_ms이다(self):
+        value = main.measure_ms(main.mac, main.make_x(5), main.make_cross(5))
+        self.assertGreater(value, 0)
+        self.assertTrue(math.isfinite(value))
 
 
 if __name__ == "__main__":

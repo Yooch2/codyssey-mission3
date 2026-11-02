@@ -2,10 +2,11 @@
 
 MAC(Multiply-Accumulate) 연산으로 입력 패턴이 십자가(Cross)에 가까운지
 X자에 가까운지 판별하는 콘솔 애플리케이션이다.
-표준 라이브러리(json, os, time)만 사용한다.
+표준 라이브러리(json, math, os, time, unicodedata)만 사용한다.
 """
 
 import json
+import math
 import os
 import time
 import unicodedata
@@ -176,7 +177,9 @@ def read_row(size):
     raw = input()
     parts = raw.split()
     # "0 1 0" 이 기본이지만 "010" 처럼 붙여 쓴 경우도 받아준다.
-    if len(parts) == 1 and len(parts[0]) == size:
+    # 전부 숫자일 때만 쪼갠다. "0.5"나 "-11"까지 쪼개면 '.'이나 '-'를
+    # 숫자가 아니라고 지적하게 되어, 정작 개수가 모자란다는 사실이 가려진다.
+    if len(parts) == 1 and len(parts[0]) == size and parts[0].isdigit():
         parts = list(parts[0])
     if len(parts) != size:
         print("입력 형식 오류: 각 줄에 %d개의 숫자를 공백으로 구분해 입력하세요." % size)
@@ -184,10 +187,16 @@ def read_row(size):
     values = []
     for part in parts:
         try:
-            values.append(float(part))
+            value = float(part)
         except ValueError:
             print("입력 형식 오류: '%s' 는 숫자가 아닙니다. 숫자만 입력하세요." % part)
             return None
+        # float()은 'inf'와 'nan'도 받아들인다. 그대로 두면 점수가 nan이 되어
+        # 모든 비교가 거짓이 되고 판정이 뜻을 잃는다. 입력 단계에서 막는다.
+        if not math.isfinite(value):
+            print("입력 형식 오류: '%s' 는 사용할 수 없습니다. 유한한 숫자만 입력하세요." % part)
+            return None
+        values.append(value)
     return values
 
 
@@ -212,6 +221,10 @@ def print_matrix(matrix):
 
 def format_number(value):
     """1.0 은 '1', 0.5 는 '0.5' 처럼 짧게 보여준다."""
+    if not math.isfinite(value):
+        # int(inf)와 int(nan)은 예외를 낸다. 입력 단계에서 걸러지지만
+        # 다른 경로로 들어와도 출력이 죽지 않도록 그대로 찍는다.
+        return str(value)
     if value == int(value):
         return str(int(value))
     return str(value)
@@ -385,6 +398,9 @@ def load_filters(raw_filters):
                       % (key, label_key, size, size))
                 continue
             table[label] = matrix
+        if size in filters:
+            print("경고: size_%d 필터가 이미 있습니다. '%s' 의 내용으로 덮어씁니다."
+                  % (size, key))
         filters[size] = table
         if table:
             loaded = ", ".join(sorted(table.keys()))
@@ -395,14 +411,23 @@ def load_filters(raw_filters):
 
 
 def parse_size(key):
-    """'size_13' 또는 'size_13_1' 에서 13을 뽑아낸다."""
+    """'size_13' 또는 'size_13_1' 에서 13을 뽑아낸다.
+
+    형식이 맞지 않거나 크기가 1보다 작으면 None을 돌려준다.
+    0이나 음수 크기는 행렬로 성립하지 않는데, 거르지 않으면
+    빈 배열이 '0x0 정사각 행렬'로 통과해 점수 0.0 대 0.0의
+    가짜 동점 판정이 나온다.
+    """
     parts = str(key).split("_")
     if len(parts) < 2 or parts[0] != "size":
         return None
     try:
-        return int(parts[1])
+        size = int(parts[1])
     except ValueError:
         return None
+    if size < 1:
+        return None
+    return size
 
 
 def sort_key(key):

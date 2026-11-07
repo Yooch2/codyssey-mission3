@@ -321,14 +321,39 @@ def run_user_mode():
         print("입력이 끝나 모드 1을 중단합니다. 메뉴로 돌아갑니다.")
 
 
+def ask_filter_source():
+    """필터를 직접 입력할지 패턴 생성기로 만들지 고른다.
+
+    생성기(make_cross/make_x)는 원래 성능 분석 입력을 만들 때만 썼다.
+    같은 함수를 모드 1에도 연결해, 9칸을 두 번 입력하지 않고도
+    표준 필터로 바로 돌려볼 수 있게 했다.
+    """
+    while True:
+        print("필터를 어떻게 채울까요?")
+        print("1. 직접 입력")
+        print("2. 패턴 생성기로 생성 (A=십자가, B=X자)")
+        choice = input("선택: ").strip()
+        if choice == "1":
+            return False
+        if choice == "2":
+            return True
+        print("1 또는 2 중에서 선택하세요.")
+
+
 def run_user_mode_steps():
     """모드 1의 실제 입력-연산-출력 흐름."""
     size = 3
 
     print_header("[1] 필터 입력")
-    filter_a = read_matrix("필터 A", size)
-    print()
-    filter_b = read_matrix("필터 B", size)
+    if ask_filter_source():
+        filter_a = make_cross(size)
+        filter_b = make_x(size)
+        print("패턴 생성기로 %dx%d 필터를 만들었습니다. (A=십자가, B=X자)"
+              % (size, size))
+    else:
+        filter_a = read_matrix("필터 A", size)
+        print()
+        filter_b = read_matrix("필터 B", size)
 
     print_header("[2] 저장 확인")
     print("필터 A")

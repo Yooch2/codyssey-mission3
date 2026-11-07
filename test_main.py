@@ -463,7 +463,8 @@ class TestInteractiveFlow(unittest.TestCase):
         self.assertIn("입력이 끝나 모드 1을 중단합니다", message)
 
     def test_모드1은_예시대로_넣으면_B로_판정한다(self):
-        answers = ["0 1 0", "1 1 1", "0 1 0",     # 필터 A (십자가)
+        answers = ["1",                           # 필터 채우기: 직접 입력
+                   "0 1 0", "1 1 1", "0 1 0",     # 필터 A (십자가)
                    "1 0 1", "0 1 0", "1 0 1",     # 필터 B (X자)
                    "1 0 1", "0 1 0", "1 0 1"]     # 패턴 (X자)
         _, message = self.run_with(answers, main.run_user_mode)
@@ -472,11 +473,29 @@ class TestInteractiveFlow(unittest.TestCase):
         self.assertIn("판정: B", message)
 
     def test_모드1은_동점이면_판정_불가를_알린다(self):
-        answers = ["1 0 0", "0 0 0", "0 0 0",     # 필터 A
+        answers = ["1",                           # 필터 채우기: 직접 입력
+                   "1 0 0", "0 0 0", "0 0 0",     # 필터 A
                    "0 0 0", "0 0 0", "0 0 1",     # 필터 B
                    "1 0 0", "0 0 0", "0 0 1"]     # 패턴 (양쪽 모두 1.0)
         _, message = self.run_with(answers, main.run_user_mode)
         self.assertIn("판정: 판정 불가", message)
+
+    def test_모드1에서_생성기로_필터를_채울_수_있다(self):
+        # 패턴 생성기(보너스)가 성능 분석뿐 아니라 모드 1 입력으로도
+        # 쓰이는지 확인한다. 이 검사가 없으면 생성기와 모드 1의 연결이
+        # 끊어져도 아무도 모른다.
+        answers = ["2",                           # 필터 채우기: 생성기
+                   "1 0 1", "0 1 0", "1 0 1"]     # 패턴 (X자)
+        _, message = self.run_with(answers, main.run_user_mode)
+        self.assertIn("패턴 생성기로 3x3 필터를 만들었습니다", message)
+        self.assertIn("A 점수: 1.0", message)     # 십자가 필터와 한 칸 겹침
+        self.assertIn("B 점수: 5.0", message)     # X자 필터와 다섯 칸 겹침
+        self.assertIn("판정: B", message)
+
+    def test_필터_채우기_선택은_잘못된_번호를_다시_묻는다(self):
+        answers = ["9", "2", "1 0 1", "0 1 0", "1 0 1"]
+        _, message = self.run_with(answers, main.run_user_mode)
+        self.assertIn("1 또는 2 중에서 선택하세요", message)
 
     def test_메뉴는_잘못된_번호를_다시_묻는다(self):
         choice, message = self.run_with(["9", "엔터", "2"], main.choose_mode)

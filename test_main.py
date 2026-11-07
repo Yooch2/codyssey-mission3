@@ -500,11 +500,41 @@ class TestInteractiveFlow(unittest.TestCase):
     def test_메뉴는_잘못된_번호를_다시_묻는다(self):
         choice, message = self.run_with(["9", "엔터", "2"], main.choose_mode)
         self.assertEqual(choice, "2")
-        self.assertIn("1, 2, 3 중에서 선택하세요", message)
+        self.assertIn("1, 2, 3, 4 중에서 선택하세요", message)
 
-    def test_메뉴에서_3이나_입력끝이면_종료한다(self):
-        self.assertIsNone(self.run_with(["3"], main.choose_mode)[0])
+    def test_메뉴에서_4나_입력끝이면_종료한다(self):
+        self.assertIsNone(self.run_with(["4"], main.choose_mode)[0])
         self.assertIsNone(self.run_with([EOFError], main.choose_mode)[0])
+
+    def test_모드3은_크기를_받아_생성하고_판정까지_간다(self):
+        # 보너스 요구: "크기 N 입력 시 N x N 십자가와 X 패턴을 자동 생성"하고
+        # "생성된 패턴을 모드 1/성능 분석에 재활용"한다. 생성부터 성능 분석까지
+        # 한 흐름으로 이어지는지 확인한다.
+        _, message = self.run_with(["5"], main.run_generator_mode)
+        self.assertIn("생성 결과 (5x5)", message)
+        self.assertIn("Cross 패턴 | Cross 점수 9.0 | X 점수 1.0", message)
+        self.assertIn("X 패턴 | Cross 점수 1.0 | X 점수 9.0", message)
+        self.assertIn("일치", message)
+        self.assertNotIn("불일치", message)
+        self.assertIn("연산 횟수", message)        # [3] 성능 분석
+        self.assertIn("1차원(ms)", message)        # [4] 최적화 비교
+
+    def test_모드3은_범위_밖_크기를_다시_받는다(self):
+        _, message = self.run_with(["abc", "2", "5"], main.run_generator_mode)
+        self.assertIn("'abc' 는 정수가 아닙니다", message)
+        self.assertIn("3 이상 1000 이하로 입력하세요", message)
+        self.assertIn("생성 결과 (5x5)", message)
+
+    def test_모드3은_큰_행렬을_찍지_않고_요약한다(self):
+        # 한계보다 큰 크기를 그대로 찍으면 수백 줄이 나와 다른 출력을 밀어낸다.
+        size = main.GENERATOR_PRINT_LIMIT + 1
+        _, message = self.run_with([str(size)], main.run_generator_mode)
+        self.assertIn("라 생략", message)
+        self.assertIn("값이 1인 칸", message)
+
+    def test_모드3은_입력이_끊기면_안내하고_끝난다(self):
+        _, message = self.run_with([EOFError], main.run_generator_mode)
+        self.assertIn("입력이 끝나 모드 3을 중단합니다", message)
 
 
 class TestPerformanceOutput(unittest.TestCase):

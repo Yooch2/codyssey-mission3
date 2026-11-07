@@ -36,6 +36,18 @@ UNDECIDED = "UNDECIDED"
 # 성능 분석에 사용할 크기 목록
 PERF_SIZES = [3, 5, 13, 25]
 
+# 보너스 패턴 생성기가 받는 크기 범위.
+# 하한 3은 미션이 정한 최소 크기다. N이 1이면 십자가와 X자가 똑같은
+# 행렬([[1.0]])이 되어 비교 자체가 성립하지 않는다.
+# 상한 1000은 README 5절에서 실제로 측정해본 가장 큰 크기다.
+# 더 큰 값도 돌아가지만 재본 적이 없어 받지 않는다.
+GENERATOR_MIN_SIZE = 3
+GENERATOR_MAX_SIZE = 1000
+
+# 생성한 행렬을 화면에 그대로 찍는 크기의 한계.
+# 이보다 크면 줄 수가 너무 많아 다른 출력을 밀어내므로 요약만 보여준다.
+GENERATOR_PRINT_LIMIT = 25
+
 SEPARATOR = "#" + "-" * 38
 
 
@@ -588,6 +600,85 @@ def run_json_mode():
 
 
 # ---------------------------------------------------------------
+# 모드 3: 패턴 생성기 (보너스)
+# ---------------------------------------------------------------
+
+def ask_size():
+    """생성할 패턴의 크기 N을 입력받는다. 범위를 벗어나면 다시 받는다."""
+    prompt = "크기 N (%d~%d): " % (GENERATOR_MIN_SIZE, GENERATOR_MAX_SIZE)
+    while True:
+        raw = input(prompt).strip()
+        try:
+            size = int(raw)
+        except ValueError:
+            print("'%s' 는 정수가 아닙니다. 정수를 입력하세요." % raw)
+            continue
+        if size < GENERATOR_MIN_SIZE or size > GENERATOR_MAX_SIZE:
+            print("%d 이상 %d 이하로 입력하세요."
+                  % (GENERATOR_MIN_SIZE, GENERATOR_MAX_SIZE))
+            continue
+        return size
+
+
+def count_ones(matrix):
+    """행렬에서 0이 아닌 칸의 개수를 센다."""
+    total = 0
+    for row in matrix:
+        for value in row:
+            if value:
+                total += 1
+    return total
+
+
+def show_generated(label, matrix, size):
+    """생성한 패턴을 보여준다. 큰 행렬은 찍지 않고 요약만 남긴다."""
+    print(label)
+    if size <= GENERATOR_PRINT_LIMIT:
+        print_matrix(matrix)
+    else:
+        print("  (%dx%d 라 생략. 값이 1인 칸 %d개 / 전체 %d칸)"
+              % (size, size, count_ones(matrix), size * size))
+
+
+def run_generator_mode():
+    """보너스: 크기 N을 받아 십자가와 X자를 만들고 그대로 분석까지 돌린다.
+
+    생성한 패턴을 바로 MAC 판정과 성능 분석에 넘겨서,
+    생성기가 분석 경로에 실제로 연결돼 있다는 것을 한 화면에서 보여준다.
+    """
+    try:
+        size = ask_size()
+    except EOFError:
+        print()
+        print("입력이 끝나 모드 3을 중단합니다. 메뉴로 돌아갑니다.")
+        return
+
+    cross = make_cross(size)
+    x_mark = make_x(size)
+
+    print_header("[1] 생성 결과 (%dx%d)" % (size, size))
+    show_generated("Cross", cross, size)
+    show_generated("X", x_mark, size)
+
+    print_header("[2] 생성한 패턴으로 MAC 판정")
+    # 생성한 패턴을 두 필터와 비교하면 자기 쪽 필터가 이겨야 한다.
+    # 그렇지 않으면 생성기나 MAC 연산 중 하나가 잘못된 것이다.
+    for label, pattern in ((CROSS, cross), (X_MARK, x_mark)):
+        score_cross = mac(pattern, cross)
+        score_x = mac(pattern, x_mark)
+        verdict = decide(score_cross, score_x)
+        print("%s 패턴 | Cross 점수 %s | X 점수 %s | 판정 %s | %s"
+              % (label, score_cross, score_x, verdict,
+                 "일치" if verdict == label else "불일치"))
+
+    print_header("[3] 성능 분석 (평균/%d회)" % REPEAT)
+    print_performance([size])
+
+    print_header("[4] 최적화 비교 (2차원 배열 vs 1차원 배열)")
+    print_optimization([size])
+
+
+# ---------------------------------------------------------------
 # 진입점
 # ---------------------------------------------------------------
 
@@ -599,16 +690,17 @@ def choose_mode():
         print()
         print("1. 사용자 입력 (3x3)")
         print("2. data.json 분석")
-        print("3. 종료")
+        print("3. 패턴 생성기 (크기 N)")
+        print("4. 종료")
         try:
             choice = input("선택: ").strip()
         except EOFError:
             return None
-        if choice in ("1", "2"):
+        if choice in ("1", "2", "3"):
             return choice
-        if choice == "3":
+        if choice == "4":
             return None
-        print("1, 2, 3 중에서 선택하세요.")
+        print("1, 2, 3, 4 중에서 선택하세요.")
 
 
 def main():
@@ -620,8 +712,10 @@ def main():
             return
         if choice == "1":
             run_user_mode()
-        else:
+        elif choice == "2":
             run_json_mode()
+        else:
+            run_generator_mode()
 
 
 if __name__ == "__main__":

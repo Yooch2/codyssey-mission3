@@ -14,6 +14,7 @@ main.py의 함수를 그대로 불러 쓰며, 측정 방법도 본체와 같다.
 import array
 import json
 import platform
+import random
 import statistics
 import sys
 import tracemalloc
@@ -260,34 +261,55 @@ def bench_epsilon():
                       "유리수 Cross", "유리수 X", "판정"], rows)
 
 
-def bench_warmup():
-    """README 3-5: 워밍업 횟수를 바꾸면 측정값이 어떻게 달라지는가."""
-    section("[3-5] 워밍업 횟수별 측정값 (25x25, 각 9회 실행)")
-    rows = []
-    for warmup in (0, 1, 2, 5, 10):
-        values = []
-        for _ in range(9):
+WARMUP_COUNTS = (0, 1, 2, 5, 10)
+
+
+def bench_warmup(rounds=9):
+    """README 3-5: 워밍업 횟수를 바꾸면 측정값이 어떻게 달라지는가.
+
+    워밍업 횟수들을 한 라운드 안에서 번갈아 재고, 라운드마다 순서를 섞는다.
+    예전에는 "0회를 9번, 그다음 1회를 9번" 식으로 한 조건을 몰아서 쟀는데,
+    그러면 측정이 진행되는 동안 기기 상태가 변하는 드리프트가
+    그대로 워밍업 효과처럼 보인다. 나중에 재는 조건일수록 유리하거나
+    불리해지기 때문이다. 순서를 섞으면 드리프트가 모든 조건에 고르게
+    퍼져서 상쇄되고, 남는 차이만 워밍업 효과로 읽을 수 있다.
+    """
+    section("[3-5] 워밍업 횟수별 측정값 (25x25, 각 %d회, 순서 무작위 교차)" % rounds)
+    samples = {warmup: [] for warmup in WARMUP_COUNTS}
+    order = list(WARMUP_COUNTS)
+    for _ in range(rounds):
+        random.shuffle(order)
+        for warmup in order:
             pattern = main.make_x(25)
             matrix_filter = main.make_cross(25)
-            values.append(main.measure_ms(main.mac, pattern, matrix_filter,
-                                          warmup=warmup))
+            samples[warmup].append(
+                main.measure_ms(main.mac, pattern, matrix_filter, warmup=warmup))
+
+    rows = []
+    for warmup in WARMUP_COUNTS:
+        values = samples[warmup]
         rows.append(["%d회" % warmup, "%.4f" % statistics.median(values),
                      "%.4f" % min(values), "%.4f" % max(values)])
     main.print_table(["워밍업", "평균 시간(ms)", "최소", "최대"], rows)
 
     # 결론을 적어두지 않고 이번 실행의 값으로 계산해 보고한다.
-    # 실행에 따라 워밍업 효과가 보이기도 하고 전혀 안 보이기도 한다.
-    medians = [float(row[1]) for row in rows]
+    medians = [statistics.median(samples[w]) for w in WARMUP_COUNTS]
     change = (medians[-1] - medians[0]) / medians[0] * 100
     spread = max(medians) - min(medians)
+    # 같은 조건을 되풀이했을 때의 흔들림. 워밍업별 중앙값의 차이가
+    # 이것보다 작으면 그 차이는 잡음 안에 있다는 뜻이라 효과라고 할 수 없다.
+    noise = statistics.median(
+        [max(samples[w]) - min(samples[w]) for w in WARMUP_COUNTS])
     print()
-    print("이번 실행에서 0회 대비 10회의 변화: %+.1f%%" % change)
-    print("워밍업 횟수별 중앙값의 최대-최소 폭: %.4f ms" % spread)
-    if abs(change) < 2:
-        print("→ 이번 실행에서는 워밍업 효과가 측정 잡음에 묻혀 보이지 않는다.")
+    print("0회 대비 10회의 변화: %+.1f%%" % change)
+    print("워밍업별 중앙값의 최대-최소 폭: %.4f ms" % spread)
+    print("같은 조건 %d회의 흔들림(중앙값): %.4f ms" % (rounds, noise))
+    if spread < noise:
+        print("→ 워밍업별 차이가 같은 조건의 흔들림보다 작다.")
+        print("  순서를 섞어 드리프트를 걷어내면 워밍업 효과가 확인되지 않는다.")
     else:
-        print("→ 이번 실행에서는 워밍업 횟수가 늘수록 값이 낮아지는 경향이 보인다.")
-    print("두 결과 모두 관측된 적이 있다. 자세한 내용은 README 3-5절에 적었다.")
+        print("→ 워밍업별 차이가 흔들림보다 크다. 효과가 남아 있을 수 있다.")
+    print("자세한 내용은 README 3-5절에 적었다.")
 
 
 def main_entry():

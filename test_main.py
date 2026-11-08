@@ -191,6 +191,20 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(sorted(keys, key=main.sort_key),
                          ["size_5_2", "size_5_10", "size_13_2", "size_25_1"])
 
+    def test_정렬은_번호가_없는_키도_다룬다(self):
+        # 번호 없는 키는 [크기, 0] 이 되어 같은 크기의 1번보다 앞에 온다.
+        # 길이를 2로 맞추지 않으면 [5] 와 [5, 1] 의 비교가 깨진다.
+        self.assertEqual(main.sort_key("size_5"), [5, 0])
+        self.assertEqual(sorted(["size_5_1", "size_5"], key=main.sort_key),
+                         ["size_5", "size_5_1"])
+
+    def test_문자열_정렬은_크기_순서와_어긋난다(self):
+        # README 3-4절이 sort_key 를 쓰는 이유로 든 비교다.
+        # 이 성질이 바뀌면 문서의 설명도 다시 봐야 한다.
+        keys = ["size_5_1", "size_13_1", "size_25_1"]
+        self.assertEqual(sorted(keys),
+                         ["size_13_1", "size_25_1", "size_5_1"])
+
     def test_정사각_배열만_통과한다(self):
         self.assertTrue(main.is_square([[1, 2], [3, 4]], 2))
         self.assertFalse(main.is_square([[1, 2], [3]], 2))

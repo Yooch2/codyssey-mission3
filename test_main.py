@@ -116,6 +116,38 @@ class TestGenerator(unittest.TestCase):
                              main.X_MARK)
 
 
+class TestGeneratorFairness(unittest.TestCase):
+    """두 필터가 공평한지 확인한다. 모드 3이 홀수만 받는 근거다."""
+
+    def test_홀수에서는_두_패턴의_1인_칸_수가_같다(self):
+        # 1인 칸 수가 곧 자기 자신과의 MAC 점수다. 두 필터의 '무게'가
+        # 다르면 중립적인 입력도 무거운 쪽으로 기운다.
+        for size in (3, 5, 11, 25, 101):
+            cross, x_mark = main.make_cross(size), main.make_x(size)
+            self.assertEqual(main.count_ones(cross), 2 * size - 1, size)
+            self.assertEqual(main.count_ones(x_mark), 2 * size - 1, size)
+
+    def test_홀수에서는_중립적인_입력이_동점이_된다(self):
+        # 전부 1인 패턴은 어느 쪽도 닮지 않았으므로 판정이 나오면 안 된다.
+        for size in (3, 5, 11, 25):
+            cross, x_mark = main.make_cross(size), main.make_x(size)
+            ones = [[1.0] * size for _ in range(size)]
+            self.assertEqual(
+                main.decide(main.mac(ones, cross), main.mac(ones, x_mark)),
+                main.UNDECIDED, size)
+
+    def test_짝수에서는_공평하지_않아_모드3이_막는다(self):
+        # 막는 이유를 코드로 남겨둔다. 이 성질이 바뀌면 제한도 다시 봐야 한다.
+        for size in (4, 10, 26, 100):
+            cross, x_mark = main.make_cross(size), main.make_x(size)
+            self.assertEqual(main.count_ones(cross), 2 * size - 1, size)
+            self.assertEqual(main.count_ones(x_mark), 2 * size, size)
+            ones = [[1.0] * size for _ in range(size)]
+            self.assertEqual(
+                main.decide(main.mac(ones, cross), main.mac(ones, x_mark)),
+                main.X_MARK, size)
+
+
 class TestSchema(unittest.TestCase):
     """스키마 검증과 키 해석을 확인한다."""
 
@@ -522,12 +554,22 @@ class TestInteractiveFlow(unittest.TestCase):
     def test_모드3은_범위_밖_크기를_다시_받는다(self):
         _, message = self.run_with(["abc", "2", "5"], main.run_generator_mode)
         self.assertIn("'abc' 는 정수가 아닙니다", message)
-        self.assertIn("3 이상 1000 이하로 입력하세요", message)
+        self.assertIn("3 이상 999 이하로 입력하세요", message)
         self.assertIn("생성 결과 (5x5)", message)
+
+    def test_모드3은_짝수_크기를_거절하고_이유를_알린다(self):
+        # 짝수에서는 십자가의 가운데가 한쪽으로 치우치고 X자의 1인 칸이
+        # 하나 많아져, 중립적인 입력도 X로 기운다(아래 불변식 테스트 참고).
+        _, message = self.run_with(["10", "11"], main.run_generator_mode)
+        self.assertIn("10 은 짝수입니다", message)
+        self.assertIn("홀수를 입력하세요 (9 또는 11)", message)
+        self.assertIn("생성 결과 (11x11)", message)
 
     def test_모드3은_큰_행렬을_찍지_않고_요약한다(self):
         # 한계보다 큰 크기를 그대로 찍으면 수백 줄이 나와 다른 출력을 밀어낸다.
-        size = main.GENERATOR_PRINT_LIMIT + 1
+        # 홀수만 받으므로 한계(25)보다 큰 첫 홀수인 27로 확인한다.
+        size = main.GENERATOR_PRINT_LIMIT + 2
+        self.assertEqual(size % 2, 1)
         _, message = self.run_with([str(size)], main.run_generator_mode)
         self.assertIn("라 생략", message)
         self.assertIn("값이 1인 칸", message)

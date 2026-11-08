@@ -36,13 +36,20 @@ UNDECIDED = "UNDECIDED"
 # 성능 분석에 사용할 크기 목록
 PERF_SIZES = [3, 5, 13, 25]
 
-# 보너스 패턴 생성기가 받는 크기 범위.
+# 보너스 패턴 생성기가 받는 크기 범위. 홀수만 받는다.
 # 하한 3은 미션이 정한 최소 크기다. N이 1이면 십자가와 X자가 똑같은
 # 행렬([[1.0]])이 되어 비교 자체가 성립하지 않는다.
-# 상한 1000은 README 5절에서 실제로 측정해본 가장 큰 크기다.
+# 상한 999는 README 5절에서 측정해본 가장 큰 크기(1000) 아래의 홀수다.
 # 더 큰 값도 돌아가지만 재본 적이 없어 받지 않는다.
+#
+# 짝수를 막는 이유는 짝수 N에서 두 패턴이 공평하지 않기 때문이다(README 3-6절).
+# 십자가는 가운데 행과 열이 하나여야 대칭이 되는데, 짝수면 size//2가
+# 한쪽으로 치우친 행을 고른다(N=10이면 위 5줄 아래 4줄).
+# 게다가 X자는 두 대각선이 중앙에서 겹치지 않아 1인 칸이 2N개가 되고,
+# 십자가는 2N-1개에 머문다. 필터 한쪽이 1칸 무거우면 중립적인 입력도
+# X로 기운다. 실제로 N=10에서 전부 1인 패턴이 X로 판정됐다.
 GENERATOR_MIN_SIZE = 3
-GENERATOR_MAX_SIZE = 1000
+GENERATOR_MAX_SIZE = 999
 
 # 생성한 행렬을 화면에 그대로 찍는 크기의 한계.
 # 이보다 크면 줄 수가 너무 많아 다른 출력을 밀어내므로 요약만 보여준다.
@@ -604,8 +611,8 @@ def run_json_mode():
 # ---------------------------------------------------------------
 
 def ask_size():
-    """생성할 패턴의 크기 N을 입력받는다. 범위를 벗어나면 다시 받는다."""
-    prompt = "크기 N (%d~%d): " % (GENERATOR_MIN_SIZE, GENERATOR_MAX_SIZE)
+    """생성할 패턴의 크기 N을 입력받는다. 조건에 맞지 않으면 다시 받는다."""
+    prompt = "크기 N (%d~%d 홀수): " % (GENERATOR_MIN_SIZE, GENERATOR_MAX_SIZE)
     while True:
         raw = input(prompt).strip()
         try:
@@ -616,6 +623,12 @@ def ask_size():
         if size < GENERATOR_MIN_SIZE or size > GENERATOR_MAX_SIZE:
             print("%d 이상 %d 이하로 입력하세요."
                   % (GENERATOR_MIN_SIZE, GENERATOR_MAX_SIZE))
+            continue
+        if size % 2 == 0:
+            print("%d 은 짝수입니다. 짝수에서는 십자가의 가운데 행이 한쪽으로"
+                  " 치우치고, X자의 1인 칸이 십자가보다 하나 많아져" % size)
+            print("두 필터가 공평하지 않습니다. 홀수를 입력하세요 (%d 또는 %d)."
+                  % (size - 1, size + 1))
             continue
         return size
 

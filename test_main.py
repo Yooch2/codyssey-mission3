@@ -625,5 +625,74 @@ class TestPerformanceOutput(unittest.TestCase):
             self.assertIn(str(size * size), output)
 
 
+class TestOutputContract(unittest.TestCase):
+    """시계의 편차와 무관하게 출력 예시와 단위를 확인한다."""
+
+    def mode1(self, rows):
+        buffer = io.StringIO()
+        with mock.patch("builtins.input", side_effect=rows):
+            with contextlib.redirect_stdout(buffer), mock.patch(
+                    "main.measure_ms", return_value=0.125):
+                main.run_user_mode()
+        return buffer.getvalue()
+
+    def test_모드1_점수와_ms_소수4자리(self):
+        output = self.mode1(["2", "101", "010", "101"])
+        self.assertIn("A 점수: 1.0\nB 점수: 5.0\n", output)
+        self.assertIn("연산 시간(평균/10회): 0.1250 ms\n판정: B", output)
+
+    def test_모드1도_공통판정과_차이를_쓴다(self):
+        with mock.patch("main.decide", wraps=main.decide) as decide:
+            output = self.mode1(["2", "000", "000", "000"])
+        decide.assert_called_once_with(0.0, 0.0)
+        self.assertIn("판정: 판정 불가 (|A-B| < 1e-09)\n점수 차이: 0.000e+00", output)
+
+    def test_성능표_단위와_자리수(self):
+        with mock.patch("main.measure_ms", return_value=0.125):
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                main.print_performance([3, 25])
+        lines = buffer.getvalue().splitlines()
+        self.assertIn("평균 시간(ms)", lines[0])
+        self.assertEqual(lines[2].split(), ["3x3", "0.1250", "9"])
+        self.assertEqual(lines[3].split(), ["25x25", "0.1250", "625"])
+
+    def test_초에서_ms로_변환한다(self):
+        with mock.patch("main.time.perf_counter", side_effect=[1.0, 1.02]):
+            elapsed = main.measure_ms(lambda a, b: None, None, None, repeat=10, warmup=1)
+        self.assertAlmostEqual(elapsed, 2.0)
+
+    def test_EPSILON과_같은_차이는_동점이_아니다(self):
+        self.assertEqual(main.decide(0.0, main.EPSILON), main.X_MARK)
+        self.assertEqual(main.decide(main.EPSILON, 0.0), main.CROSS)
+
+    def test_모든_라벨별칭과_공백을_검증한다(self):
+        for label, variants in ((main.CROSS, ("+", "cross", "plus")),
+                                (main.X_MARK, ("x",))):
+            for text in variants:
+                with self.subTest(text=text):
+                    self.assertEqual(main.normalize_label(" " + text.upper() + " "), label)
+
+    def test_JSON의_비유한값도_거부한다(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            self.assertFalse(main.is_square([[value]], 1))
+
+    def test_실패목록은_지수표기_차이를_담는다(self):
+        with contextlib.redirect_stdout(io.StringIO()) as buffer:
+            result = main.run_json_mode()
+        failures = buffer.getvalue().split("실패 케이스:")[1]
+        self.assertRegex(failures, r"차이 [0-9]\.[0-9]{3}e[-+][0-9]{2}")
+        self.assertEqual(result["summary"]["undecided"], 3)
+        self.assertEqual(sum(not case["passed"] for case in result["cases"]), 3)
+
+    def test_메모리부족이면_현재모드를_중단한다(self):
+        with mock.patch("main.choose_mode", side_effect=["3", None]), mock.patch(
+                "main.run_generator_mode", side_effect=MemoryError):
+            with contextlib.redirect_stdout(io.StringIO()) as buffer:
+                main.main()
+        self.assertIn("메모리가 부족해 현재 모드를 중단", buffer.getvalue())
+        self.assertIn("프로그램을 종료합니다", buffer.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,7 @@ def mac(pattern, matrix_filter):
     total = 0.0
     for row in range(size):
         for col in range(size):
+            # 한 칸당 곱셈 1회 + 누적 덧셈 1회. 각 비용의 비중은 별도 측정하지 않았다.
             total += pattern[row][col] * matrix_filter[row][col]
     return total
 
@@ -130,6 +131,8 @@ def normalize_label(raw):
 
     data.json의 expected 값과 filter 키가 서로 다른 표기를 쓰기 때문에
     프로그램 안에서는 표준 라벨 두 가지(Cross, X)로 통일해서 비교한다.
+    입력: raw는 임의 타입. 문자열이면 앞뒤 공백과 대소문자를 정리한다.
+    반환: 알려진 문자열은 str(Cross/X), 그 밖의 값과 비문자열은 None.
     알 수 없는 표기는 None을 돌려줘서 호출한 쪽에서 FAIL 처리하게 한다.
     """
     if not isinstance(raw, str):
@@ -143,7 +146,11 @@ def normalize_label(raw):
 
 
 def decide(score_cross, score_x):
-    """두 점수를 허용오차 기준으로 비교해 판정 라벨을 돌려준다."""
+    """두 유한한 점수를 비교해 Cross/X/UNDECIDED 중 하나를 반환한다.
+
+    차이가 EPSILON 미만일 때만 동점이다. 정확히 경계와 같으면 구분한다.
+    EPSILON은 실행 속도나 장치가 아니라 입력 값의 범위와 오차 정책에 따른다.
+    """
     if abs(score_cross - score_x) < EPSILON:
         return UNDECIDED
     if score_cross > score_x:
@@ -396,9 +403,11 @@ def run_user_mode_steps():
     print("B 점수: %s" % score_b)
     print("연산 시간(평균/%d회): %.4f ms" % (REPEAT, average))
 
-    if abs(score_a - score_b) < EPSILON:
+    verdict = decide(score_a, score_b)
+    if verdict == UNDECIDED:
         print("판정: 판정 불가 (|A-B| < %s)" % EPSILON)
-    elif score_a > score_b:
+        print("점수 차이: %.3e" % abs(score_a - score_b))
+    elif verdict == CROSS:
         print("판정: A")
     else:
         print("판정: B")
@@ -421,11 +430,17 @@ def is_square(matrix, size):
         for value in row:
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return False
+            if isinstance(value, float) and not math.isfinite(value):
+                return False
     return True
 
 
 def load_filters(raw_filters):
-    """filters를 {크기: {표준라벨: 행렬}} 형태로 정규화한다."""
+    """filters를 {크기: {표준라벨: 행렬}} 형태로 정규화한다.
+
+    같은 크기가 재등장하면 JSON에서 나중에 나온 항목이 전체를 덮어쓴다.
+    라벨 별칭이 겹치는 경우에도 나중 값이 우선한다. 크기 충돌은 경고한다.
+    """
     filters = {}
     if not isinstance(raw_filters, dict):
         return filters
@@ -517,7 +532,11 @@ def check_case(key, case, filters):
 
 
 def run_json_mode():
-    """data.json을 읽어 모든 케이스를 일괄 판정한다."""
+    """모드 2 콘솔 리포트를 출력하고 같은 결과를 dict로 반환한다.
+
+    데이터 파일·최상위 스키마를 읽지 못하면 안내 후 None을 반환한다.
+    개별 케이스 오류는 실패로 기록하고 나머지 케이스를 계속 처리한다.
+    """
     print_header("[1] 필터 로드")
     # 어느 파일로 채점했는지 남긴다. 다른 디렉터리에서 실행해도
     # main.py 옆의 data.json을 읽으므로, 경로를 보여줘야 확인할 수 있다.
@@ -551,6 +570,7 @@ def run_json_mode():
     undecided_count = 0    # 동점으로 FAIL 난 개수
     mismatch_count = 0     # 판정은 났지만 expected와 다른 개수
     schema_count = 0       # 데이터/스키마 문제로 판정 자체를 못 한 개수
+    cases = []             # JSON/Markdown 저장에서도 콘솔과 같은 판정을 사용한다.
     keys = sorted(raw_patterns.keys(), key=sort_key)
 
     for key in keys:
@@ -560,12 +580,19 @@ def run_json_mode():
             print("판정: FAIL (%s)" % reason)
             failures.append((key, reason, ""))
             schema_count += 1
+            cases.append({"key": key, "verdict": None, "expected": None,
+                          "passed": False, "reason": reason})
             continue
 
         pattern, expected, table = parsed
         score_cross = mac(pattern, table[CROSS])
         score_x = mac(pattern, table[X_MARK])
         verdict = decide(score_cross, score_x)
+        cases.append({"key": key, "verdict": verdict, "expected": expected,
+                      "passed": verdict == expected, "score_cross": score_cross,
+                      "score_x": score_x, "difference": abs(score_cross - score_x),
+                      "reason": ("동점" if verdict == UNDECIDED else
+                                 "" if verdict == expected else "라벨 불일치")})
         detail = "Cross %s / X %s, 차이 %.3e" % (
             score_cross, score_x, abs(score_cross - score_x))
 
@@ -585,7 +612,7 @@ def run_json_mode():
             mismatch_count += 1
 
     print_header("[3] 성능 분석 (평균/%d회)" % REPEAT)
-    print_performance(PERF_SIZES)
+    performance = print_performance(PERF_SIZES)
 
     print_header("[4] 최적화 비교 (2차원 배열 vs 1차원 배열)")
     print_optimization(PERF_SIZES)
@@ -604,6 +631,14 @@ def run_json_mode():
             print("- %s: %s" % (key, reason))
             if detail:
                 print("    %s" % detail)
+
+    return {"data_file": DATA_FILE, "epsilon": EPSILON,
+            "summary": {"total": len(keys), "passed": passed,
+                        "failed": len(failures), "undecided": undecided_count,
+                        "mismatch": mismatch_count, "schema_errors": schema_count},
+            "cases": cases,
+            "performance": [{"size": size, "average_ms": average,
+                             "mac_count": size * size} for size, average in performance]}
 
 
 # ---------------------------------------------------------------
@@ -723,12 +758,16 @@ def main():
         if choice is None:
             print("프로그램을 종료합니다.")
             return
-        if choice == "1":
-            run_user_mode()
-        elif choice == "2":
-            run_json_mode()
-        else:
-            run_generator_mode()
+        try:
+            if choice == "1":
+                run_user_mode()
+            elif choice == "2":
+                run_json_mode()
+            else:
+                run_generator_mode()
+        except MemoryError:
+            # 큰 행렬의 할당 실패는 같은 크기로 즉시 재시도하지 않는다.
+            print("메모리가 부족해 현재 모드를 중단합니다. 더 작은 크기를 사용하세요.")
 
 
 if __name__ == "__main__":

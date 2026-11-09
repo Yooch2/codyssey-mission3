@@ -32,6 +32,21 @@ def median_ms(function, left, right, repeat=main.REPEAT, runs=5):
         main.measure_ms(function, left, right, repeat=repeat) for _ in range(runs))
 
 
+def bench_variation(runs=5):
+    """10회 평균을 runs번 측정해 평균·중앙값·표본 표준편차를 비교한다."""
+    section("반복 측정 편차 (각 표본은 %d회 평균, 표본 %d개)" % (main.REPEAT, runs))
+    rows = []
+    for size in main.PERF_SIZES:
+        left, right = main.make_x(size), main.make_cross(size)
+        samples = [main.measure_ms(main.mac, left, right) for _ in range(runs)]
+        rows.append(["%dx%d" % (size, size),
+                     "%.6f" % statistics.mean(samples),
+                     "%.6f" % statistics.median(samples),
+                     "%.6f" % statistics.stdev(samples), str(size * size)])
+    main.print_table(["크기", "평균(ms)", "중앙값(ms)", "표준편차(ms)", "연산 횟수"], rows)
+    print("표준편차는 개별 MAC 호출이 아니라 10회 평균 표본 사이의 변동이다.")
+
+
 def fit_quadratic(sizes, times):
     """시간 = 고정비용 + 곱셈당비용 x N^2 을 최소제곱으로 맞춘다.
 
@@ -326,6 +341,7 @@ def main_entry():
         "최적화": bench_optimization,
         "엡실론": bench_epsilon,
         "워밍업": bench_warmup,
+        "편차": bench_variation,
     }
     if wanted:
         unknown = [name for name in wanted if name not in runs]
@@ -339,10 +355,14 @@ def main_entry():
         model = bench_performance()
     if not wanted or "대규모" in wanted:
         bench_large(*model)
-    for name in ("최적화", "엡실론", "워밍업"):
+    for name in ("최적화", "엡실론", "워밍업", "편차"):
         if not wanted or name in wanted:
             runs[name]()
 
 
 if __name__ == "__main__":
-    main_entry()
+    try:
+        main_entry()
+    except (MemoryError, KeyboardInterrupt):
+        print("\n측정을 중단했습니다. 메모리 부족이면 입력 크기를 줄여 다시 실행하세요.")
+        sys.exit(1)
